@@ -186,19 +186,12 @@ export class PlaywrightCdp implements INodeType {
 				const executeFunctions = this;
 				const $getNodeData = (nodeName: string) => {
 					try {
-						// Get data from specified node
-						const nodeData = executeFunctions.evaluateExpression(
-							`$('${nodeName}')`,
+						return executeFunctions.evaluateExpression(
+							`{{ $('${nodeName}') }}`,
 							itemIndex,
-						) as {
-							item?: { json: Record<string, unknown> };
-							first?: () => { json: Record<string, unknown> };
-							last?: () => { json: Record<string, unknown> };
-							all?: () => Array<{ json: Record<string, unknown> }>;
-						};
-						return nodeData;
-					} catch {
-						throw new Error(`Cannot access node "${nodeName}". Make sure the node exists and has been executed.`);
+						);
+					} catch (err) {
+						throw new Error(`Cannot access node "${nodeName}": ${err instanceof Error ? err.message : String(err)}`);
 					}
 				};
 
