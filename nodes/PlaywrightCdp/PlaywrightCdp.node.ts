@@ -38,6 +38,17 @@ interface NativeHumanModule {
 
 let nativeHumanModulePromise: Promise<NativeHumanModule> | undefined;
 
+interface CachedBrowserConnection {
+	browser: playwright.Browser;
+	humanized: boolean;
+}
+
+// Keep CDP connections alive between node executions. Playwright does not
+// expose a public disconnect() method for connectOverCDP, so the safest way to
+// support session reuse is to retain the connection and reuse it on the next
+// node execution. The final node can select "Close Browser" to dispose it.
+const browserConnections = new Map<string, CachedBrowserConnection>();
+
 /**
  * CloakBrowser is ESM-only while n8n community nodes are emitted as CommonJS.
  * Keep the native human module as a runtime ESM import so the packaged node can
@@ -77,7 +88,8 @@ const page = await $context.newPage();
 await page.goto('https://example.com');
 
 const title = await page.title();
-await page.close();
+// Leave the page open when using Session Cleanup = Disconnect Only.
+// The final node can use Session Cleanup = Close Browser.
 
 return { title };`;
 
@@ -213,12 +225,12 @@ export class PlaywrightCdp implements INodeType {
 							{
 								name: 'Disconnect Only',
 								value: 'disconnect',
-								description: 'Keep the remote browser and pages alive for later n8n nodes',
+								description: 'Keep the browser session alive and reuse its CDP connection in later n8n nodes',
 							},
 						],
 						default: 'close',
 						description:
-							'Choose whether this node closes the Manager/CloakBrowser session or only disconnects its CDP client connection',
+							'Choose whether this node closes the Manager/CloakBrowser session or keeps it available for later nodes',
 					},
 				],
 			},
@@ -232,6 +244,7 @@ export class PlaywrightCdp implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			let browser: playwright.Browser | null = null;
 			let sessionCleanup: 'close' | 'disconnect' = 'close';
+			let connectionEndpoint = '';
 
 			try {
 				// Get parameters
@@ -251,7 +264,7 @@ export class PlaywrightCdp implements INodeType {
 				const proxy = options.proxy ?? '';
 				const geoip = options.geoip ?? false;
 				sessionCleanup = options.sessionCleanup ?? 'close';
-				const connectionEndpoint = applyCloakConnectionOptions(cdpEndpoint, {
+				connectionEndpoint = applyCloakConnectionOptions(cdpEndpoint, {
 					proxy,
 					geoip,
 				});
@@ -263,31 +276,54 @@ export class PlaywrightCdp implements INodeType {
 					});
 				}
 
-				// Connect to browser
-				try {
-					browser = await playwright.chromium.connectOverCDP(connectionEndpoint, {
-						timeout: connectionTimeout,
+				// Reuse a live CDP connection when a previous node selected
+				// Disconnect Only. This keeps the Manager profile and its pages alive.
+				const cachedConnection = browserConnections.get(connectionEndpoint);
+				if (cachedConnection?.browser.isConnected()) {
+					browser = cachedConnection.browser;
+				} else {
+					if (cachedConnection) {
+						browserConnections.delete(connectionEndpoint);
+					}
+
+					// Connect to browser
+					try {
+						browser = await playwright.chromium.connectOverCDP(connectionEndpoint, {
+							timeout: connectionTimeout,
+						});
+					} catch (connectError) {
+						const message =
+							connectError instanceof Error ? connectError.message : String(connectError);
+						throw new NodeOperationError(
+							this.getNode(),
+							`Failed to connect to CDP endpoint: ${cdpEndpoint}\n\n` +
+								`Error: ${message}\n\n` +
+								`Please verify:\n` +
+								`- Browser is running and accessible\n` +
+								`- CDP endpoint URL is correct\n` +
+								`- Port is not blocked by firewall`,
+							{ itemIndex },
+						);
+					}
+
+					browserConnections.set(connectionEndpoint, {
+						browser,
+						humanized: false,
 					});
-				} catch (connectError) {
-					const message =
-						connectError instanceof Error ? connectError.message : String(connectError);
-					throw new NodeOperationError(
-						this.getNode(),
-						`Failed to connect to CDP endpoint: ${cdpEndpoint}\n\n` +
-							`Error: ${message}\n\n` +
-							`Please verify:\n` +
-							`- Browser is running and accessible\n` +
-							`- CDP endpoint URL is correct\n` +
-							`- Port is not blocked by firewall`,
-						{ itemIndex },
-					);
+					browser.once('disconnected', () => {
+						if (browserConnections.get(connectionEndpoint)?.browser === browser) {
+							browserConnections.delete(connectionEndpoint);
+						}
+					});
 				}
 
 				// CloakBrowser's native human layer is designed for CDP-connected browsers.
 				// It patches all existing pages/contexts and any pages created afterwards.
-				if (emulateHuman) {
+				const connectionState = browserConnections.get(connectionEndpoint);
+				if (emulateHuman && connectionState && !connectionState.humanized) {
 					const { patchBrowser, resolveConfig } = await loadNativeHumanModule();
 					patchBrowser(browser, resolveConfig(humanPreset));
+					connectionState.humanized = true;
 				}
 
 				// Get browser context (use existing or create new). If no context exists,
@@ -374,22 +410,16 @@ export class PlaywrightCdp implements INodeType {
 					});
 				}
 			} finally {
-				// Close the remote browser only when explicitly requested. Disconnecting
-				// leaves Manager/CloakBrowser's profile and its open pages available to
-				// later n8n nodes that connect to the same CDP endpoint.
+				// Close the remote browser only when explicitly requested. Disconnect Only
+				// retains the live connection in browserConnections for later nodes.
 				if (browser) {
-					if (sessionCleanup === 'disconnect') {
-						// Playwright's public Browser API does not expose disconnect() for
-						// connectOverCDP. Closing the internal transport disconnects this
-						// client without closing the remote Manager profile or its pages.
-						const browserWithConnection = browser as playwright.Browser & {
-							_connection?: { close?: () => void };
-						};
-						browserWithConnection._connection?.close?.();
-					} else {
+					if (sessionCleanup === 'close') {
 						await browser.close().catch(() => {
-						// Ignore errors during cleanup
+							// Ignore errors during cleanup
 						});
+						if (browserConnections.get(connectionEndpoint)?.browser === browser) {
+							browserConnections.delete(connectionEndpoint);
+						}
 					}
 				}
 			}
