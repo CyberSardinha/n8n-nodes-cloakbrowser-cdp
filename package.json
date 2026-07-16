@@ -1,5 +1,5 @@
 {
-	"name": "n8n-nodes-playwright-cdp",
+	"name": "n8n-nodes-cloakbrowser-cdp",
 	"version": "0.1.0",
 	"description": "n8n node for controlling CloakBrowser over CDP with native CloakBrowser humanization",
 	"license": "MIT",

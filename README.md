@@ -1,4 +1,4 @@
-# n8n-nodes-playwright-cdp
+# n8n-nodes-cloakbrowser-cdp
 
 Execute Playwright code in n8n by connecting to CloakBrowser via Chrome DevTools Protocol (CDP).
 
@@ -15,13 +15,13 @@ Perfect for:
 
 1. Go to **Settings > Community Nodes**
 2. Select **Install**
-3. Enter `n8n-nodes-playwright-cdp`
+3. Enter `n8n-nodes-cloakbrowser-cdp`
 4. Agree to the risks and click **Install**
 
 ### Manual Installation
 
 ```bash
-npm install n8n-nodes-playwright-cdp
+npm install n8n-nodes-cloakbrowser-cdp
 ```
 
 ## Usage
