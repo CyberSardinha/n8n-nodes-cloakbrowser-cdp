@@ -127,14 +127,3 @@ export interface NodeParameters {
 	connectionTimeout: number;
 	executionTimeout: number;
 }
-
-/**
- * Human emulation configuration
- */
-export interface HumanEmulationConfig {
-	enabled: boolean;
-	mouseSpeed?: { min: number; max: number }; // px per 100ms, default: 100-300
-	typingDelay?: { min: number; max: number }; // ms between keystrokes, default: 50-150
-	scrollDelay?: { min: number; max: number }; // ms between scroll steps, default: 50-100
-}
-

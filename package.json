@@ -1,22 +1,26 @@
 {
 	"name": "n8n-nodes-playwright-cdp",
-	"version": "1.0.2",
-	"description": "n8n node to execute Playwright code via CDP connection to running browsers",
+	"version": "0.1.0",
+	"description": "n8n node for controlling CloakBrowser over CDP with native CloakBrowser humanization",
 	"license": "MIT",
-	"homepage": "https://github.com/oneassasin/n8n-nodes-playwright-cdp",
+	"homepage": "https://github.com/cybersardinha/n8n-nodes-cloakbrowser-cdp",
 	"keywords": [
 		"n8n-community-node-package",
 		"playwright",
 		"cdp",
+		"cloakbrowser",
 		"browser-automation",
 		"antidetect"
 	],
 	"author": {
 		"name": "Bogdan"
 	},
+	"engines": {
+		"node": ">=20.0.0"
+	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/oneassasin/n8n-nodes-playwright-cdp.git"
+		"url": "https://github.com/cybersardinha/n8n-nodes-cloakbrowser-cdp.git"
 	},
 	"scripts": {
 		"build": "n8n-node build",
@@ -38,7 +42,8 @@
 		]
 	},
 	"dependencies": {
-		"playwright-core": "^1.40.0"
+		"cloakbrowser": "0.4.10",
+		"playwright-core": "1.61.0"
 	},
 	"devDependencies": {
 		"@n8n/node-cli": "*",

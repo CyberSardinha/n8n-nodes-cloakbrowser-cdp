@@ -8,14 +8,39 @@ import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import * as playwright from 'playwright-core';
 import { createHelpers } from './helpers';
 import { executeUserCode, normalizeResult } from './execute';
-import { createHumanizedPage } from './human';
-import type { ExecutionSandbox, HumanEmulationConfig } from './types';
+import type { ExecutionSandbox } from './types';
+
+type HumanPreset = 'default' | 'careful';
+
+interface NativeHumanModule {
+	patchBrowser(browser: playwright.Browser, config: Record<string, unknown>): void;
+	resolveConfig(preset?: HumanPreset): Record<string, unknown>;
+}
+
+let nativeHumanModulePromise: Promise<NativeHumanModule> | undefined;
+
+/**
+ * CloakBrowser is ESM-only while n8n community nodes are emitted as CommonJS.
+ * Keep the native human module as a runtime ESM import so the packaged node can
+ * load it without changing n8n's module format.
+ */
+function loadNativeHumanModule(): Promise<NativeHumanModule> {
+	if (!nativeHumanModulePromise) {
+		const dynamicImport = new Function(
+			'modulePath',
+			'return import(modulePath);',
+		) as (modulePath: string) => Promise<NativeHumanModule>;
+		nativeHumanModulePromise = dynamicImport('cloakbrowser/human');
+	}
+
+	return nativeHumanModulePromise;
+}
 
 const DEFAULT_CODE = `// Available variables:
 // $('NodeName') - Get data from another node (like n8n Code node)
 // $playwright - Playwright instance
 // $browser - Connected browser instance
-// $context - Default browser context (human-like if enabled)
+// $context - Default browser context (humanized by CloakBrowser when enabled)
 // $helpers - Helper functions:
 //   - screenshot(page, options) - Take screenshot, returns binary
 //   - pdf(page, options) - Generate PDF (headless only)
@@ -27,7 +52,7 @@ const DEFAULT_CODE = `// Available variables:
 // $input - Input data from previous node
 // $json - Shortcut for $input.item.json
 // $binary - Binary data from previous node
-// $humanized - true if human emulation is enabled
+// $humanized - true if CloakBrowser humanize is enabled
 
 const page = await $context.newPage();
 await page.goto('https://example.com');
@@ -59,8 +84,9 @@ export class PlaywrightCdp implements INodeType {
 				type: 'string',
 				default: '',
 				required: true,
-				placeholder: 'http://localhost:9222',
-				description: 'URL to connect to browser via Chrome DevTools Protocol',
+				placeholder: 'http://cloakbrowser:9222',
+				description:
+					'URL exposed by CloakBrowser cloakserve. Use the Docker service name when n8n and CloakBrowser share a network, or host.docker.internal when they run in separate containers.',
 			},
 			{
 				displayName: 'JavaScript Code',
@@ -81,7 +107,33 @@ export class PlaywrightCdp implements INodeType {
 				name: 'emulateHuman',
 				type: 'boolean',
 				default: false,
-				description: 'Whether to simulate human-like mouse movements, typing delays, and scrolling. When enabled, page.click(), page.type(), and page.fill() will behave like a real human.',
+				description:
+					'Whether to enable CloakBrowser native humanization for mouse curves, realistic typing, scrolling, locators, frames, and element handles',
+			},
+			{
+				displayName: 'Humanize Preset',
+				name: 'humanPreset',
+				type: 'options',
+				options: [
+					{
+						name: 'Default',
+						value: 'default',
+						description: 'Normal human speed',
+					},
+					{
+						name: 'Careful',
+						value: 'careful',
+						description: 'Slower, more deliberate actions with idle micro-movements',
+					},
+				],
+				default: 'default',
+				displayOptions: {
+					show: {
+						emulateHuman: [true],
+					},
+				},
+				description:
+					'Native CloakBrowser preset. Individual actions can also override settings with the human_config option.',
 			},
 			{
 				displayName: 'Options',
@@ -129,6 +181,7 @@ export class PlaywrightCdp implements INodeType {
 				const cdpEndpoint = this.getNodeParameter('cdpEndpoint', itemIndex) as string;
 				const code = this.getNodeParameter('code', itemIndex) as string;
 				const emulateHuman = this.getNodeParameter('emulateHuman', itemIndex) as boolean;
+				const humanPreset = this.getNodeParameter('humanPreset', itemIndex, 'default') as HumanPreset;
 				const options = this.getNodeParameter('options', itemIndex, {}) as {
 					connectionTimeout?: number;
 					executionTimeout?: number;
@@ -163,35 +216,34 @@ export class PlaywrightCdp implements INodeType {
 					);
 				}
 
-				// Get browser context (use existing or create new)
+				// CloakBrowser's native human layer is designed for CDP-connected browsers.
+				// It patches all existing pages/contexts and any pages created afterwards.
+				if (emulateHuman) {
+					const { patchBrowser, resolveConfig } = await loadNativeHumanModule();
+					patchBrowser(browser, resolveConfig(humanPreset));
+				}
+
+				// Get browser context (use existing or create new). If no context exists,
+				// patchBrowser has already wrapped browser.newContext() for us.
 				const contexts = browser.contexts();
 				const context = contexts.length > 0 ? contexts[0] : await browser.newContext();
-
-				// Human emulation config
-				const humanConfig: HumanEmulationConfig = { enabled: emulateHuman };
-
-				// If human emulation is enabled, wrap context.newPage() to return humanized pages
-				if (emulateHuman) {
-					const originalNewPage = context.newPage.bind(context);
-					(context as unknown as { newPage: () => Promise<playwright.Page> }).newPage = async () => {
-						const page = await originalNewPage();
-						return createHumanizedPage(page, humanConfig);
-					};
-				}
 
 				// Create helpers
 				const helpers = createHelpers(this, context);
 
 				// Create $ function for accessing other nodes' data
-				const executeFunctions = this;
 				const $getNodeData = (nodeName: string) => {
 					try {
-						return executeFunctions.evaluateExpression(
+						return this.evaluateExpression(
 							`{{ $('${nodeName}') }}`,
 							itemIndex,
 						);
 					} catch (err) {
-						throw new Error(`Cannot access node "${nodeName}": ${err instanceof Error ? err.message : String(err)}`);
+						throw new NodeOperationError(
+							this.getNode(),
+							`Cannot access node "${nodeName}": ${err instanceof Error ? err.message : String(err)}`,
+							{ itemIndex },
+						);
 					}
 				};
 

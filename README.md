@@ -1,6 +1,8 @@
 # n8n-nodes-playwright-cdp
 
-Execute Playwright code in n8n by connecting to browsers via Chrome DevTools Protocol (CDP).
+Execute Playwright code in n8n by connecting to CloakBrowser via Chrome DevTools Protocol (CDP).
+
+The node uses CloakBrowser's official `cloakbrowser/human` module when humanization is enabled. The browser can run in a different container from n8n; no CloakBrowser binary is started inside the n8n container.
 
 Perfect for:
 - Connecting to antidetect browsers (Dolphin Anty, AdsPower, GoLogin, etc.)
@@ -13,18 +15,42 @@ Perfect for:
 
 1. Go to **Settings > Community Nodes**
 2. Select **Install**
-3. Enter `@oneassasin/n8n-nodes-playwright-cdp`
+3. Enter `n8n-nodes-playwright-cdp`
 4. Agree to the risks and click **Install**
 
 ### Manual Installation
 
 ```bash
-npm install @oneassasin/n8n-nodes-playwright-cdp
+npm install n8n-nodes-playwright-cdp
 ```
 
 ## Usage
 
-### 1. Get CDP Endpoint
+### 1. Start CloakBrowser in CDP server mode
+
+Run CloakBrowser separately and expose its CDP port:
+
+```bash
+docker network create automation
+
+docker run -d --name cloakbrowser \
+  --network automation \
+  cloakhq/cloakbrowser cloakserve
+```
+
+If n8n is on the same Docker network, use `http://cloakbrowser:9222` in the node. If the containers are on different networks, publish the port and use the host address reachable from n8n (for example `http://host.docker.internal:9222` on Docker Desktop):
+
+The n8n container must also be attached to the `automation` network for the service name to resolve.
+
+```bash
+docker run -d --name cloakbrowser \
+  -p 127.0.0.1:9222:9222 \
+  cloakhq/cloakbrowser cloakserve
+```
+
+The endpoint should respond to `GET /json/version` before the n8n node runs.
+
+### 2. Configure the CDP endpoint
 
 Start your browser with remote debugging enabled or get the CDP URL from your antidetect browser:
 
@@ -38,14 +64,15 @@ google-chrome --remote-debugging-port=9222
 - AdsPower: Local API → Get debug port
 - GoLogin: Profile → Remote debugging
 
-### 2. Configure Node
+### 3. Configure Node
 
-- **CDP Endpoint URL**: Your browser's CDP endpoint (e.g., `ws://localhost:9222/devtools/browser/...`)
+- **CDP Endpoint URL**: The URL reachable from the n8n container (e.g., `http://cloakbrowser:9222`)
 - **JavaScript Code**: Your Playwright automation code
-- **Emulate Human Behavior**: Enable human-like mouse movements and typing
+- **Emulate Human Behavior**: Enable CloakBrowser's native human-like mouse movements, typing, scrolling, locators, frames, and element handles
+- **Humanize Preset**: Choose `Default` or the slower, more deliberate `Careful` preset
 - **Options**: Connection/execution timeouts
 
-### 3. Write Code
+### 4. Write Code
 
 Available variables in your code:
 
@@ -58,7 +85,7 @@ Available variables in your code:
 | `$input` | Input data from previous node |
 | `$json` | Shortcut for `$input.item.json` |
 | `$binary` | Binary data from previous node |
-| `$humanized` | `true` if human emulation enabled |
+| `$humanized` | `true` when CloakBrowser's native humanization is enabled |
 
 ## Helper Functions
 
@@ -160,11 +187,11 @@ Output:
 
 ## Human Emulation
 
-When **Emulate Human Behavior** is enabled:
+When **Emulate Human Behavior** is enabled, the node calls CloakBrowser's native `patchBrowser()` after connecting over CDP. This patches existing pages and all pages/contexts created by the workflow:
 
-- `page.click()` moves mouse along bezier curves to target
-- `page.type()` / `page.fill()` types with random delays between keystrokes
-- Clicks target random points within elements, not center
+- `page.click()` and locator clicks use Bezier curves, realistic aim points, and click timing
+- `page.type()` / `page.fill()` type with per-character timing and thinking pauses
+- scrolling, hover, keyboard, frames, and element handles use the same native humanization layer
 
 ```javascript
 // With human emulation enabled:
@@ -176,6 +203,11 @@ await page.click('#login-button');
 
 // This will type with realistic delays
 await page.type('#username', 'user@example.com');
+
+// Native per-call overrides are also supported:
+await page.fill('#message', 'Hello', {
+  human_config: { typing_delay: 100 }
+});
 ```
 
 ## Examples
