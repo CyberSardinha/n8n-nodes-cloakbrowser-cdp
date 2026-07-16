@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-cloakbrowser-cdp",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "n8n node for controlling CloakBrowser over CDP with native CloakBrowser humanization",
 	"license": "MIT",
 	"homepage": "https://github.com/cybersardinha/n8n-nodes-cloakbrowser-cdp",

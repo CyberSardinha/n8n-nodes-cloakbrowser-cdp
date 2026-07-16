@@ -12,6 +12,25 @@ import type { ExecutionSandbox } from './types';
 
 type HumanPreset = 'default' | 'careful';
 
+function applyCloakConnectionOptions(
+	endpoint: string,
+	options: { proxy?: string; geoip?: boolean },
+): string {
+	const url = new URL(endpoint);
+
+	// cloakserve reads these values from the CDP connection query string.
+	// Manager profile endpoints ignore them; configure those values on the
+	// profile before launching it instead.
+	if (options.proxy?.trim()) {
+		url.searchParams.set('proxy', options.proxy.trim());
+	}
+	if (options.geoip) {
+		url.searchParams.set('geoip', 'true');
+	}
+
+	return url.toString();
+}
+
 interface NativeHumanModule {
 	patchBrowser(browser: playwright.Browser, config: Record<string, unknown>): void;
 	resolveConfig(preset?: HumanPreset): Record<string, unknown>;
@@ -164,6 +183,43 @@ export class PlaywrightCdp implements INodeType {
 							maxValue: 3600000,
 						},
 					},
+					{
+						displayName: 'GeoIP',
+						name: 'geoip',
+						type: 'boolean',
+						default: false,
+						description:
+							'Whether CloakBrowser should detect timezone and locale from the proxy exit IP. Applies to cloakserve connection URLs.',
+					},
+					{
+						displayName: 'Proxy URL',
+						name: 'proxy',
+						type: 'string',
+						default: '',
+						placeholder: 'http://user:password@proxy:8080',
+						description:
+							'HTTP or SOCKS5 proxy passed to CloakBrowser cloakserve. For Manager profiles, configure the proxy on the profile before launching it.',
+					},
+					{
+						displayName: 'Session Cleanup',
+						name: 'sessionCleanup',
+						type: 'options',
+						options: [
+							{
+								name: 'Close Browser',
+								value: 'close',
+								description: 'Close the remote browser session after this node finishes',
+							},
+							{
+								name: 'Disconnect Only',
+								value: 'disconnect',
+								description: 'Keep the remote browser and pages alive for later n8n nodes',
+							},
+						],
+						default: 'close',
+						description:
+							'Choose whether this node closes the Manager/CloakBrowser session or only disconnects its CDP client connection',
+					},
 				],
 			},
 		],
@@ -175,6 +231,7 @@ export class PlaywrightCdp implements INodeType {
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			let browser: playwright.Browser | null = null;
+			let sessionCleanup: 'close' | 'disconnect' = 'close';
 
 			try {
 				// Get parameters
@@ -185,9 +242,19 @@ export class PlaywrightCdp implements INodeType {
 				const options = this.getNodeParameter('options', itemIndex, {}) as {
 					connectionTimeout?: number;
 					executionTimeout?: number;
+					proxy?: string;
+					geoip?: boolean;
+					sessionCleanup?: 'close' | 'disconnect';
 				};
 				const connectionTimeout = options.connectionTimeout ?? 30000;
 				const executionTimeout = options.executionTimeout ?? 60000;
+				const proxy = options.proxy ?? '';
+				const geoip = options.geoip ?? false;
+				sessionCleanup = options.sessionCleanup ?? 'close';
+				const connectionEndpoint = applyCloakConnectionOptions(cdpEndpoint, {
+					proxy,
+					geoip,
+				});
 
 				// Validate CDP endpoint
 				if (!cdpEndpoint) {
@@ -198,7 +265,7 @@ export class PlaywrightCdp implements INodeType {
 
 				// Connect to browser
 				try {
-					browser = await playwright.chromium.connectOverCDP(cdpEndpoint, {
+					browser = await playwright.chromium.connectOverCDP(connectionEndpoint, {
 						timeout: connectionTimeout,
 					});
 				} catch (connectError) {
@@ -307,11 +374,23 @@ export class PlaywrightCdp implements INodeType {
 					});
 				}
 			} finally {
-				// CRITICAL: Always close browser connection
+				// Close the remote browser only when explicitly requested. Disconnecting
+				// leaves Manager/CloakBrowser's profile and its open pages available to
+				// later n8n nodes that connect to the same CDP endpoint.
 				if (browser) {
-					await browser.close().catch(() => {
+					if (sessionCleanup === 'disconnect') {
+						// Playwright's public Browser API does not expose disconnect() for
+						// connectOverCDP. Closing the internal transport disconnects this
+						// client without closing the remote Manager profile or its pages.
+						const browserWithConnection = browser as playwright.Browser & {
+							_connection?: { close?: () => void };
+						};
+						browserWithConnection._connection?.close?.();
+					} else {
+						await browser.close().catch(() => {
 						// Ignore errors during cleanup
-					});
+						});
+					}
 				}
 			}
 		}

@@ -70,7 +70,17 @@ google-chrome --remote-debugging-port=9222
 - **JavaScript Code**: Your Playwright automation code
 - **Emulate Human Behavior**: Enable CloakBrowser's native human-like mouse movements, typing, scrolling, locators, frames, and element handles
 - **Humanize Preset**: Choose `Default` or the slower, more deliberate `Careful` preset
-- **Options**: Connection/execution timeouts
+- **Options**: Connection/execution timeouts, proxy/GeoIP connection settings, and session cleanup behavior
+
+For a direct `cloakserve` endpoint, **Proxy URL** and **GeoIP** are added to the
+CDP URL automatically. A proxy can be an HTTP or SOCKS5 URL. For CloakBrowser
+Manager, configure proxy, GeoIP, and headless mode on the profile before
+launching it; the node connects to an already-running profile and cannot change
+its launch-time headless setting.
+
+Set **Options → Session Cleanup** to **Disconnect Only** when using CloakBrowser
+Manager and you want later nodes to reuse the same running profile and open pages.
+Use **Close Browser** at the end of the workflow to terminate the remote session.
 
 ### 4. Write Code
 
